@@ -1,6 +1,6 @@
 import { createApp, reactive, ref, computed, watch, onMounted, toRaw } from '../lib/vue.esm-browser.js';
 import * as ntools from './node-utils.js';
-const apiUrl = 'https://map.meshcore.dev/api/v1/nodes';
+const apiUrl = './proxy.php';
 
 const types = {
 	'1': 'Client',
