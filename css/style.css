@@ -22,6 +22,21 @@ body:has(dialog[open])::after {
 	backdrop-filter: blur(10px);
 }
 
+body:has(#app .loading)::before {
+	content: '';
+	position: absolute;
+	z-index: 1049;
+	top: 0;
+	left: 0;
+	bottom: 0;
+	right: 0;
+	backdrop-filter: grayscale(1) blur(2px);
+	background-image: url('../img/loader.svg');
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: 64px;
+}
+
 dialog[open] {
 	z-index: 1050 !important;
 }
@@ -165,20 +180,16 @@ table.node-info tr td:last-child {
 .search-text b {
 	background-color: #ee0;
 }
-button.manual-add {
+.manual-add {
 	position: fixed;
 	z-index: 1000;
 	display: block;
+	padding: 12px !important;
 	bottom: 55px;
 	right: 10px;
 	width: 50px;
 	height: 50px;
 	border-radius: 5px;
-}
-button.manual-add::after {
-	font-size: 40px;
-	content: '+';
-	color: #fff;
 }
 
 .leaflet-bottom {
@@ -203,4 +214,34 @@ button.manual-add::after {
 .leaflet-container a.leaflet-popup-close-button {
 	width: auto !important;
 	height: auto !important;
+}
+
+.leaflet-marker-icon.update-recent {
+	filter: saturate(5) hue-rotate(260deg)
+}
+
+.leaflet-marker-icon.update-stale {
+	filter: saturate(28) hue-rotate(228deg)
+}
+
+.leaflet-marker-icon.update-old {
+	filter: saturate(5) hue-rotate(165deg);
+}
+
+.leaflet-marker-icon.update-extinct {
+	filter: grayscale(100) contrast(16);
+	opacity: 0.6;
+}
+
+time {
+	cursor: help;
+	text-decoration: underline;
+	text-decoration-style: dotted;
+}
+
+.user-actions {
+	display: flex;
+	justify-content: space-between;
+	width: 100%;
+	margin-top: 15px;
 }
