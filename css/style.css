@@ -54,8 +54,7 @@ table.node-info tr td:first-child {
 	width: 150px;
 }
 table.node-info tr td:last-child {
-	overflow: hidden;
-	text-overflow: ellipsis;
+	word-break:break-all;
 }
 
 .search-results {

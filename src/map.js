@@ -1,8 +1,49 @@
+import { unpack } from 'https://cdn.jsdelivr.net/npm/msgpackr@1.11.8/+esm';
 import { createApp, reactive, ref, computed, watch, onMounted, toRaw } from '../lib/vue.esm-browser.js';
 import * as ntools from './node-utils.js';
-const apiUrl = 'https://map.meshcore.dev/api/v1/nodes';
+const apiUrl = 'https://map.meshcore.dev/api/v1/nodes?binary=1&short=1';
+
+function uint8ArrayToHex(uint8arr) {
+	const hexOctets = new Array(uint8arr.length); //  is even faster (preallocates necessary array size), then use hexOctets[i] instead of .push()
+
+	for (let i = 0; i < uint8arr.length; ++i)
+		hexOctets.push(ntools.byteToHex[uint8arr[i]]);
+
+	return hexOctets.join('');
+}
 
 let presets = [];
+
+const nodeKeys = {
+	pk: {
+		key: 'public_key',
+		convert(val) { return uint8ArrayToHex(val) }
+	},
+	t: {
+		key: 'type',
+	},
+	n: {
+		key:'adv_name',
+	},
+	la: {
+		key:'last_advert',
+	},
+	id: {
+		key:'inserted_date',
+	},
+	ud: {
+		key:'updated_date',
+	},
+	p: {
+		key:'params',
+	},
+	l: {
+		key:'link',
+	},
+	s: {
+		key:'source',
+	},
+};
 
 const types = {
 	'1': 'Client',
@@ -12,7 +53,7 @@ const types = {
 };
 
 const updateStatusDesc = {
-	'none': 'manualy added',
+	'none': 'manually added',
 	'recent': 'updated recently',
 	'stale': 'updated while ago',
 	'old': 'not updated',
@@ -38,7 +79,7 @@ const radioParamDesc = {
 	},
 };
 
-const columnOrder = ['adv_name', 'type', 'status', 'link', 'inserted_date', 'updated_date', 'public_key', 'coords', 'preset', 'params' ];
+const columnOrder = ['adv_name', 'public_key', 'type', 'status', 'link', 'inserted_date', 'updated_date', 'coords', 'preset', 'params' ];
 const columns = {
 	coords: {
 		label: 'Coordinates',
@@ -49,7 +90,7 @@ const columns = {
 		value: (val) => escape(val)
 	},
 	status: {
-		label: 'Update status',
+		label: 'Freshness',
 		value: (val) => updateStatusDesc[val]
 	},
 	inserted_date: {
@@ -67,7 +108,7 @@ const columns = {
 		}
 	},
 	public_key: {
-		label: 'Public key'
+		label: 'Public key',
 	},
 	type: {
 		label: 'Type',
@@ -91,7 +132,7 @@ const columns = {
 	},
 	link: {
 		label: 'Meshcore link',
-		value: (val) => `<a href="javascript:navigator.clipboard.writeText('${val}')">Copy to clipboard</a>`
+		value: (uint8arr) => `<a href="javascript:navigator.clipboard.writeText('meshcore://${uint8arr.toHex()}')">Copy to clipboard</a>`
 	},
 };
 
@@ -285,6 +326,7 @@ createApp({
 			link: '',
 			nodeFilter: [],
 			fromDate: '',
+			fromInsertDate: '',
 			clusteringZoom: 12,
 			urlParams,
 			presets,
@@ -327,6 +369,7 @@ createApp({
 		function clearFilters() {
 			app.nodeFilter = [1, 2, 3, 4];
 			app.fromDate = '2025-03-01';
+			app.fromInsertDate = '2025-03-01';
 			app.cluster = 12;
 			app.presetIndex = 0;
 		}
@@ -336,7 +379,7 @@ createApp({
 		}
 
 		function getNodeUpdateStatus(node) {
-			if(node.source !== 'uploader') return 'none';
+			if(node.source[0] !== 'u') return 'none';
 			const updateEpoch = new Date(node.updated_date).getTime();
 			if(updateEpoch < Date.now() - getDaysEpochMsec(20)) return 'extinct';
 			else if(updateEpoch < Date.now() - getDaysEpochMsec(10)) return 'old';
@@ -345,18 +388,31 @@ createApp({
 			return 'recent';
 		}
 
+		function inflateNode(node) {
+			for(const key of Object.keys(node)) {
+				if(!nodeKeys[key]) continue;
+				const convertFn = nodeKeys[key].convert;
+				node[nodeKeys[key].key] = typeof convertFn === 'function' ? convertFn(node[key]) : node[key];
+
+				delete node[key]
+			}
+		}
+
 		async function downloadNodes() {
 			try {
 				app.loading = true;
 				const nodesReq = await fetch(apiUrl);
-				app.nodes = await nodesReq.json();
+				const nodesBlob = await nodesReq.blob();
+				app.nodes = unpack(await nodesBlob.arrayBuffer());
 
 				getPresets().then((presets) => {
 					app.presets = presets;
 				});
 
 				for(const node of app.nodes) {
+					inflateNode(node);
 					const updateStatus = getNodeUpdateStatus(node);
+
 					let icon = icons[updateStatus][node.type.toString()];
 
 					(app.nodesByType[node.type] ??= []).push(node);
@@ -368,12 +424,12 @@ createApp({
 					}
 
 					const marker = node.marker = L.marker(
-						[node.adv_lat, node.adv_lon], { icon, title: node.adv_name }
+						[node.lat, node.lon], { icon, title: node.adv_name }
 					);
 
 					node.status = updateStatus;
 					node.preset = node.params;
-					node.coords = `${node.adv_lat.toFixed(4)}, ${node.adv_lon.toFixed(4)}`;
+					node.coords = `${node.lat.toFixed(4)}, ${node.lon.toFixed(4)}`;
 					node.lastAdvertDate = new Date(node.last_advert);
 					node.insertDate = new Date(node.inserted_date);
 					node.updatedDate = node.updated_date && new Date(node.updated_date);
@@ -383,6 +439,7 @@ createApp({
 			}
 			catch(e) {
 				alert('There was an error loading map nodes:', e);
+				console.log(e);
 			}
 			finally {
 				app.loading = false;
@@ -397,15 +454,19 @@ createApp({
 			[
 				() => app.nodeFilter,
 				() => app.fromDate,
+				() => app.fromInsertDate,
 			],
 			() => {
 				const fromDate = new Date(app.fromDate);
+				const fromInsertDate = new Date(app.fromInsertDate);
 				app.filteredNodes = app.nodeFilter
 					.flatMap(type => app.nodesByType[type])
-					.filter(node => node && (node.updatedDate ? node.updatedDate > fromDate : node.insertDate > fromDate));
+					.filter(node => node && (node.updatedDate ? node.updatedDate > fromDate : node.insertDate > fromDate))
+					.filter(node => node && (node.insertDate > fromInsertDate));
 				console.log('refresh', app.nodeFilter, app.filteredNodes.length);
 				app.urlParams.nodes = app.nodeFilter.join(',');
 				app.urlParams.date = app.fromDate;
+				app.urlParams.dateInsert = app.fromInsertDate;
 				refreshMap({ download: false });
 			}
 		);
@@ -474,6 +535,9 @@ createApp({
 				}
 				if(urlParams.date) {
 					app.fromDate = urlParams.date
+				}
+				if(urlParams.dateInsert) {
+					app.fromInsertDate = urlParams.dateInsert
 				}
 				if(urlParams.cluster) {
 					app.clusteringZoom = urlParams.cluster;

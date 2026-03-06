@@ -1,3 +1,5 @@
+export const byteToHex = new Array(256).fill(0).map((_, i) => i.toString(16).padStart(2, '0'));
+
 function fnv1aHash(str) {
 	let hash = 0x811c9dc5n;
 	for (let i = 0; i < str.length; i++) {
