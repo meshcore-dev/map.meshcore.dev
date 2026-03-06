@@ -283,11 +283,16 @@ const baseMaps = {
 };
 
 let params = { lat: 7, lon: 25, zoom: 3 };
+let params = { lat: 7, lon: 25, zoom: 3 };
 
 const urlParams = Object.fromEntries(new URLSearchParams(location.search));
 if(Number(urlParams.lat) && Number(urlParams.lon) && Number(urlParams.zoom)) {
 	params = urlParams
+if(Number(urlParams.lat) && Number(urlParams.lon) && Number(urlParams.zoom)) {
+	params = urlParams
 }
+
+// console.log(params);
 
 const map = window.leafletMap = leaflet.map('map', {
 	minZoom: 2,
@@ -319,6 +324,9 @@ const icons = Object.fromEntries(['none', 'recent', 'stale', 'old', 'extinct'].m
 createApp({
 	setup() {
 		const app = window.app = reactive({
+			nodes: [],
+			nodesByType: {},
+			filteredNodes: [],
 			nodes: [],
 			nodesByType: {},
 			filteredNodes: [],
@@ -523,6 +531,9 @@ createApp({
 		map.on('moveend', function(e) {
 			const pos = map.getCenter();
 			const zoom = map.getZoom();
+			app.urlParams.zoom = zoom;
+			app.urlParams.lat = pos.lat.toFixed(4);
+			app.urlParams.lon = pos.lng.toFixed(4);
 			app.urlParams.zoom = zoom;
 			app.urlParams.lat = pos.lat.toFixed(4);
 			app.urlParams.lon = pos.lng.toFixed(4);
