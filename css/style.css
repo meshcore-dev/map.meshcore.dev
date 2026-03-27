@@ -232,6 +232,11 @@ table.node-info tr td:last-child {
 	opacity: 0.6;
 }
 
+.svg-node-icon {
+	background: none !important;
+	border: none !important;
+}
+
 time {
 	cursor: help;
 	text-decoration: underline;

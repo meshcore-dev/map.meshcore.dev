@@ -29,8 +29,8 @@
 						</a>
 					</a>
 				</div>
-				<form class="search no-margin" action="javascript:;">
-					<menu class="left no-wrap" id="node-filter" data-ui="#node-filter">
+				<form class="search no-margin" data-ui action="javascript:;">
+					<menu class="left no-wrap" id="node-filter">
 						<li>
 							<label class="checkbox">
 								<input type="checkbox" value="1" v-model="app.nodeFilter"><span>Clients</span>
@@ -77,6 +77,13 @@
 							<label class="slider tiny">
 								<input min="10" max="17" type="range" v-model="app.clusteringZoom">
 								<span></span>
+							</label>
+						</li>
+						<li v-if="app.availableFreqs.length > 0" style="flex-direction:column;gap:4px">
+							<span>Frequency</span>
+							<label class="checkbox" v-for="freq in app.availableFreqs" :key="freq">
+								<input type="checkbox" :value="freq" v-model="app.freqFilter">
+								<span>{{ freq }} MHz</span>
 							</label>
 						</li>
 						<li v-if="filtersActive">

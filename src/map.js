@@ -1,13 +1,13 @@
 import { unpack } from 'https://cdn.jsdelivr.net/npm/msgpackr@1.11.8/+esm';
-import { createApp, reactive, ref, computed, watch, onMounted, toRaw } from '../lib/vue.esm-browser.js';
+import { createApp, reactive, ref, computed, watch, onMounted, markRaw, shallowRef } from '../lib/vue.esm-browser.js';
 import * as ntools from './node-utils.js';
 const apiUrl = 'https://map.meshcore.dev/api/v1/nodes?binary=1&short=1';
 
 function uint8ArrayToHex(uint8arr) {
-	const hexOctets = new Array(uint8arr.length); //  is even faster (preallocates necessary array size), then use hexOctets[i] instead of .push()
+	const hexOctets = new Array(uint8arr.length);
 
 	for (let i = 0; i < uint8arr.length; ++i)
-		hexOctets.push(ntools.byteToHex[uint8arr[i]]);
+		hexOctets[i] = ntools.byteToHex[uint8arr[i]];
 
 	return hexOctets.join('');
 }
@@ -163,22 +163,21 @@ function escape(html) {
 	return html.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
 }
 
-function getSvgIconUrl(text, color) {
-	const svg = `
-	<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg" >
-		<style>
-		text { font: bold 150pt sans-serif; fill: #fff; }
-		</style>
-		<ellipse cx="50%" cy="50%" rx="50%" ry="50%" fill="${color}"/>
-		<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle">${text}</text>
-	</svg>`;
+const svgIconCache = new Map();
+function getSvgIcon(text, color) {
+	const cacheKey = text + '|' + color;
+	let icon = svgIconCache.get(cacheKey);
+	if (icon) return icon;
 
-	return L.icon({
-		iconUrl: URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' })),
+	icon = L.divIcon({
+		html: `<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><ellipse cx="256" cy="256" rx="256" ry="256" fill="${color}"/><text x="256" y="256" dominant-baseline="central" text-anchor="middle" fill="#fff" font-size="150" font-weight="bold" font-family="sans-serif">${text}</text></svg>`,
+		className: 'svg-node-icon',
 		iconSize: [32, 32],
 		iconAnchor: [17, 17],
 		popupAnchor: [0, -16],
 	});
+	svgIconCache.set(cacheKey, icon);
+	return icon;
 }
 
 function clearLocationHash () {
@@ -283,11 +282,8 @@ const baseMaps = {
 };
 
 let params = { lat: 7, lon: 25, zoom: 3 };
-let params = { lat: 7, lon: 25, zoom: 3 };
 
 const urlParams = Object.fromEntries(new URLSearchParams(location.search));
-if(Number(urlParams.lat) && Number(urlParams.lon) && Number(urlParams.zoom)) {
-	params = urlParams
 if(Number(urlParams.lat) && Number(urlParams.lon) && Number(urlParams.zoom)) {
 	params = urlParams
 }
@@ -324,15 +320,11 @@ const icons = Object.fromEntries(['none', 'recent', 'stale', 'old', 'extinct'].m
 createApp({
 	setup() {
 		const app = window.app = reactive({
-			nodes: [],
-			nodesByType: {},
-			filteredNodes: [],
-			nodes: [],
-			nodesByType: {},
-			filteredNodes: [],
 			search: '',
 			link: '',
 			nodeFilter: [],
+			freqFilter: [],
+			availableFreqs: [],
 			fromDate: '',
 			fromInsertDate: '',
 			clusteringZoom: 12,
@@ -342,6 +334,35 @@ createApp({
 			loading: false,
 		});
 
+		// Keep large arrays outside Vue's deep reactivity
+		const nodesRef = shallowRef([]);
+		const nodesByTypeRef = shallowRef({});
+		const filteredNodesRef = shallowRef([]);
+
+		// Proxy access so templates/watchers can use app.nodes etc.
+		Object.defineProperty(app, 'nodes', {
+			get: () => nodesRef.value,
+			set: (v) => { nodesRef.value = v; },
+		});
+		Object.defineProperty(app, 'nodesByType', {
+			get: () => nodesByTypeRef.value,
+			set: (v) => { nodesByTypeRef.value = v; },
+		});
+		Object.defineProperty(app, 'filteredNodes', {
+			get: () => filteredNodesRef.value,
+			set: (v) => { filteredNodesRef.value = v; },
+		});
+
+		function attachClusterClickHandler(group) {
+			group.on('click', function(e) {
+				const marker = e.layer;
+				if(marker) {
+					ensurePopup(marker);
+					marker.openPopup();
+				}
+			});
+		}
+
 		async function refreshMap({ clusteringZoom = 0 } = {}) {
 			markerClusterGroup.clearLayers();
 			const nodes = app.filteredNodes.length > 0 ? app.filteredNodes : app.nodes;
@@ -350,18 +371,23 @@ createApp({
 
 			if(clusteringZoom) {
 				markerClusterGroup = L.markerClusterGroup({
-					disableClusteringAtZoom: clusteringZoom
+					disableClusteringAtZoom: clusteringZoom,
+					chunkedLoading: true,
 				});
+				attachClusterClickHandler(markerClusterGroup);
 			}
 
-			for(const node of nodes) {
-				markerClusterGroup.addLayer(toRaw(node.marker));
+			const markers = new Array(nodes.length);
+			for(let i = 0; i < nodes.length; i++) {
+				markers[i] = nodes[i].marker;
 			}
+			markerClusterGroup.addLayers(markers);
 
 			map.addLayer(markerClusterGroup);
 		}
 
 		function showNode(node) {
+			ensurePopup(node.marker);
 			node.marker.openPopup();
 			map.flyTo(node.marker.getLatLng(), 19);
 			app.search = '';
@@ -376,6 +402,7 @@ createApp({
 
 		function clearFilters() {
 			app.nodeFilter = [1, 2, 3, 4];
+			app.freqFilter = [];
 			app.fromDate = '2025-03-01';
 			app.fromInsertDate = '2025-03-01';
 			app.cluster = 12;
@@ -386,13 +413,17 @@ createApp({
 			return days * 24 * 60 * 60 * 1000;
 		}
 
+		const _now = Date.now();
+		const _extinct = _now - getDaysEpochMsec(20);
+		const _old = _now - getDaysEpochMsec(10);
+		const _stale = _now - getDaysEpochMsec(5);
+
 		function getNodeUpdateStatus(node) {
 			if(node.source[0] !== 'u') return 'none';
 			const updateEpoch = new Date(node.updated_date).getTime();
-			if(updateEpoch < Date.now() - getDaysEpochMsec(20)) return 'extinct';
-			else if(updateEpoch < Date.now() - getDaysEpochMsec(10)) return 'old';
-			else if(updateEpoch < Date.now() - getDaysEpochMsec(5)) return 'stale';
-
+			if(updateEpoch < _extinct) return 'extinct';
+			if(updateEpoch < _old) return 'old';
+			if(updateEpoch < _stale) return 'stale';
 			return 'recent';
 		}
 
@@ -411,39 +442,58 @@ createApp({
 				app.loading = true;
 				const nodesReq = await fetch(apiUrl);
 				const nodesBlob = await nodesReq.blob();
-				app.nodes = unpack(await nodesBlob.arrayBuffer());
+				const nodes = unpack(await nodesBlob.arrayBuffer());
 
 				getPresets().then((presets) => {
 					app.presets = presets;
 				});
 
-				for(const node of app.nodes) {
-					inflateNode(node);
-					const updateStatus = getNodeUpdateStatus(node);
+				const byType = {};
+				const freqSet = new Set();
+				const CHUNK_SIZE = 2000;
 
-					let icon = icons[updateStatus][node.type.toString()];
+				for(let offset = 0; offset < nodes.length; offset += CHUNK_SIZE) {
+					const end = Math.min(offset + CHUNK_SIZE, nodes.length);
 
-					(app.nodesByType[node.type] ??= []).push(node);
-
-					if(node.type === 1) {
-						const label = ntools.getNameIconLabel(node.adv_name);
-						const color = ntools.getColourForName(node.adv_name);
-						icon = getSvgIconUrl(label, color);
+					// yield to browser between chunks so UI stays responsive
+					if(offset > 0) {
+						await new Promise(r => setTimeout(r, 0));
 					}
 
-					const marker = node.marker = L.marker(
-						[node.lat, node.lon], { icon, title: node.adv_name }
-					);
+					for(let i = offset; i < end; i++) {
+						const node = nodes[i];
+						inflateNode(node);
+						const updateStatus = getNodeUpdateStatus(node);
 
-					node.status = updateStatus;
-					node.preset = node.params;
-					node.coords = `${node.lat.toFixed(4)}, ${node.lon.toFixed(4)}`;
-					node.lastAdvertDate = new Date(node.last_advert);
-					node.insertDate = new Date(node.inserted_date);
-					node.updatedDate = node.updated_date && new Date(node.updated_date);
-					const popup = L.popup({ minWidth: 350, maxWidth: 350, content: () => getNodePopupHTML(node) });
-					marker.bindPopup(popup);
+						let icon = icons[updateStatus][node.type.toString()];
+
+						(byType[node.type] ??= []).push(node);
+
+						if(node.type === 1) {
+							const label = ntools.getNameIconLabel(node.adv_name);
+							const color = ntools.getColourForName(node.adv_name);
+							icon = getSvgIcon(label, color);
+						}
+
+						const marker = node.marker = markRaw(L.marker(
+							[node.lat, node.lon], { icon, title: node.adv_name }
+						));
+
+						node.status = updateStatus;
+						node.preset = node.params;
+						node.coords = `${node.lat.toFixed(4)}, ${node.lon.toFixed(4)}`;
+						node.lastAdvertDate = new Date(node.last_advert);
+						node.insertDate = new Date(node.inserted_date);
+						node.updatedDate = node.updated_date && new Date(node.updated_date);
+						markerToNode.set(marker, node);
+
+						if(node.params?.freq) freqSet.add(Math.floor(node.params.freq));
+					}
 				}
+
+				nodesByTypeRef.value = byType;
+				nodesRef.value = nodes;
+				app.availableFreqs = [...freqSet].sort((a, b) => a - b);
 			}
 			catch(e) {
 				alert('There was an error loading map nodes:', e);
@@ -461,18 +511,33 @@ createApp({
 		watch(
 			[
 				() => app.nodeFilter,
+				() => app.freqFilter,
 				() => app.fromDate,
 				() => app.fromInsertDate,
 			],
 			() => {
 				const fromDate = new Date(app.fromDate);
 				const fromInsertDate = new Date(app.fromInsertDate);
-				app.filteredNodes = app.nodeFilter
-					.flatMap(type => app.nodesByType[type])
-					.filter(node => node && (node.updatedDate ? node.updatedDate > fromDate : node.insertDate > fromDate))
-					.filter(node => node && (node.insertDate > fromInsertDate));
-				console.log('refresh', app.nodeFilter, app.filteredNodes.length);
+				const byType = nodesByTypeRef.value;
+				const hasFreqFilter = app.freqFilter.length > 0;
+				const freqSet = hasFreqFilter ? new Set(app.freqFilter) : null;
+
+				const result = [];
+				for(const type of app.nodeFilter) {
+					const typeNodes = byType[type];
+					if(!typeNodes) continue;
+					for(let i = 0; i < typeNodes.length; i++) {
+						const node = typeNodes[i];
+						if(node.updatedDate ? node.updatedDate <= fromDate : node.insertDate <= fromDate) continue;
+						if(node.insertDate <= fromInsertDate) continue;
+						if(hasFreqFilter && !(node.params?.freq && freqSet.has(Math.floor(node.params.freq)))) continue;
+						result.push(node);
+					}
+				}
+				filteredNodesRef.value = result;
+				console.log('refresh', app.nodeFilter, result.length);
 				app.urlParams.nodes = app.nodeFilter.join(',');
+				app.urlParams.freq = app.freqFilter.join(',');
 				app.urlParams.date = app.fromDate;
 				app.urlParams.dateInsert = app.fromInsertDate;
 				refreshMap({ download: false });
@@ -487,18 +552,33 @@ createApp({
 		const stats = computed(() => {
 			const nodes = app.nodes;
 
-			if(!nodes) return [];
+			if(!nodes || !nodes.length) return [];
+
+			const byType = app.nodesByType;
+			const now = Date.now();
+			const msPerDay = 86400000;
+			const t1 = now - msPerDay;
+			const t7 = now - 7 * msPerDay;
+			const t30 = now - 30 * msPerDay;
+			let c1 = 0, c7 = 0, c30 = 0;
+
+			for(let i = 0; i < nodes.length; i++) {
+				const insertMs = nodes[i].insertDate.getTime();
+				if(insertMs > t1) c1++;
+				if(insertMs > t7) c7++;
+				if(insertMs > t30) c30++;
+			}
 
 			const result = [];
 			result.push(`
 				<span>total: <b>${nodes.length}</b></span>&nbsp;|
-				<i class="node-type pointer-help" title="Total client nodes">person</i><b>${nodes.filter(n => n.type === 1).length}</b>&nbsp;|
-				<i class="node-type pointer-help" title="Total repeater nodes">cell_tower</i><b>${nodes.filter(n => n.type === 2).length}</b>&nbsp;|
-				<i class="node-type pointer-help" title="Total room server nodes">forum</i><b>${nodes.filter(n => n.type === 3).length}</b>
+				<i class="node-type pointer-help" title="Total client nodes">person</i><b>${(byType[1] || []).length}</b>&nbsp;|
+				<i class="node-type pointer-help" title="Total repeater nodes">cell_tower</i><b>${(byType[2] || []).length}</b>&nbsp;|
+				<i class="node-type pointer-help" title="Total room server nodes">forum</i><b>${(byType[3] || []).length}</b>
 			`);
-			result.push(`<span class="pointer-help" title="Nodes added in last 24 hours">24h: <b>${app.nodes.filter(n => isNewerThan(n.inserted_date, 1)).length}</b></span>`);
-			result.push(`<span class="pointer-help" title="Nodes added in last 7 days">7d: <b>${app.nodes.filter(n => isNewerThan(n.inserted_date, 7)).length}</b></span>`);
-			result.push(`<span class="pointer-help" title="Nodes added in last 30 days">30d: <b>${app.nodes.filter(n => isNewerThan(n.inserted_date, 30)).length}</b></span>`);
+			result.push(`<span class="pointer-help" title="Nodes added in last 24 hours">24h: <b>${c1}</b></span>`);
+			result.push(`<span class="pointer-help" title="Nodes added in last 7 days">7d: <b>${c7}</b></span>`);
+			result.push(`<span class="pointer-help" title="Nodes added in last 30 days">30d: <b>${c30}</b></span>`);
 
 			return result;
 		});
@@ -517,8 +597,25 @@ createApp({
 		});
 
 		let markerClusterGroup = L.markerClusterGroup({
-			disableClusteringAtZoom: app.clusteringZoom
+			disableClusteringAtZoom: app.clusteringZoom,
+			chunkedLoading: true,
 		});
+
+		// Map markers back to nodes for lazy popup binding
+		const markerToNode = new WeakMap();
+
+		// Lazy popup binding — only create popup when a marker is clicked
+		function ensurePopup(marker) {
+			if(!marker._popupBound) {
+				const node = markerToNode.get(marker);
+				if(node) {
+					marker.bindPopup(
+						markRaw(L.popup({ minWidth: 350, maxWidth: 350, content: () => getNodePopupHTML(node) }))
+					);
+					marker._popupBound = true;
+				}
+			}
+		}
 
 		watch(
 			() => app.urlParams,
@@ -528,12 +625,11 @@ createApp({
 			{ deep: true }
 		);
 
+		attachClusterClickHandler(markerClusterGroup);
+
 		map.on('moveend', function(e) {
 			const pos = map.getCenter();
 			const zoom = map.getZoom();
-			app.urlParams.zoom = zoom;
-			app.urlParams.lat = pos.lat.toFixed(4);
-			app.urlParams.lon = pos.lng.toFixed(4);
 			app.urlParams.zoom = zoom;
 			app.urlParams.lat = pos.lat.toFixed(4);
 			app.urlParams.lon = pos.lng.toFixed(4);
@@ -543,6 +639,9 @@ createApp({
 			downloadNodes().then(() => {
 				if(urlParams.nodes) {
 					app.nodeFilter = urlParams.nodes.split(',');
+				}
+				if(urlParams.freq) {
+					app.freqFilter = urlParams.freq.split(',').map(Number);
 				}
 				if(urlParams.date) {
 					app.fromDate = urlParams.date
