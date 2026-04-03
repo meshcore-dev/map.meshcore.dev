@@ -1,4 +1,4 @@
-# map.meshcore.dev
+# map.meshcore.io
 Official MeshCore Map (frontend)
 
 ## Installation
